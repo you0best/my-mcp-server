@@ -1,21 +1,22 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { InferenceClient } from '@huggingface/inference'
 import { z } from 'zod'
 
-// Hugging Face Inference Client 초기화
-const hfClient = new InferenceClient(process.env.HF_TOKEN)
-
-// Create server instance
-const server = new McpServer({
-    name: 'greeting-server',
-    version: '1.0.0',
-    capabilities: {
-        tools: {},
-        resources: {},
-        prompts: {}
-    }
+// Configuration Schema for Smithery
+export const configSchema = z.object({
+    hfToken: z.string().optional().describe('Hugging Face API 토큰 (이미지 생성 기능 사용 시 필요)')
 })
+
+// 언어별 인사말 매핑
+const greetings: Record<string, (name: string) => string> = {
+    korean: (name) => `안녕하세요, ${name}님! 반갑습니다!`,
+    english: (name) => `Hello, ${name}! Nice to meet you!`,
+    japanese: (name) => `こんにちは、${name}さん！はじめまして！`,
+    chinese: (name) => `你好，${name}！很高兴认识你！`,
+    spanish: (name) => `¡Hola, ${name}! ¡Mucho gusto!`,
+    french: (name) => `Bonjour, ${name}! Enchanté!`,
+    german: (name) => `Hallo, ${name}! Freut mich!`,
+}
 
 // 가짜 서버 정보 데이터
 const fakeServerInfo = {
@@ -50,31 +51,47 @@ const fakeServerInfo = {
     environment: 'production'
 }
 
-// 서버 정보 리소스 등록
-server.resource(
-    'server-info',
-    'server://info',
-    async (uri) => ({
-        contents: [
-            {
-                uri: uri.href,
-                mimeType: 'application/json',
-                text: JSON.stringify(fakeServerInfo, null, 2)
-            }
-        ]
-    })
-)
+// Smithery용 createServer 함수 (default export)
+export default function createServer({ config }: { config: z.infer<typeof configSchema> }) {
+    // Hugging Face Inference Client 초기화 (토큰이 제공된 경우에만)
+    const hfClient = config.hfToken ? new InferenceClient(config.hfToken) : null
 
-// 서버 상태 리소스 등록
-server.resource(
-    'server-status',
-    'server://status',
-    async (uri) => ({
-        contents: [
-            {
-                uri: uri.href,
-                mimeType: 'text/plain',
-                text: `🖥️ 서버 상태 리포트
+    // Create server instance
+    const server = new McpServer({
+        name: 'my-mcp-server',
+        version: '1.0.0',
+        capabilities: {
+            tools: {},
+            resources: {},
+            prompts: {}
+        }
+    })
+
+    // 서버 정보 리소스 등록
+    server.resource(
+        'server-info',
+        'server://info',
+        async (uri) => ({
+            contents: [
+                {
+                    uri: uri.href,
+                    mimeType: 'application/json',
+                    text: JSON.stringify(fakeServerInfo, null, 2)
+                }
+            ]
+        })
+    )
+
+    // 서버 상태 리소스 등록
+    server.resource(
+        'server-status',
+        'server://status',
+        async (uri) => ({
+            contents: [
+                {
+                    uri: uri.href,
+                    mimeType: 'text/plain',
+                    text: `🖥️ 서버 상태 리포트
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📛 서버명: ${fakeServerInfo.serverName}
 📌 버전: ${fakeServerInfo.version}
@@ -107,245 +124,236 @@ server.resource(
 🔄 마지막 재시작: ${fakeServerInfo.lastRestart}
 🏷️ 환경: ${fakeServerInfo.environment}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
-            }
-        ]
-    })
-)
-
-// 언어별 인사말 매핑
-const greetings: Record<string, (name: string) => string> = {
-    korean: (name) => `안녕하세요, ${name}님! 반갑습니다!`,
-    english: (name) => `Hello, ${name}! Nice to meet you!`,
-    japanese: (name) => `こんにちは、${name}さん！はじめまして！`,
-    chinese: (name) => `你好，${name}！很高兴认识你！`,
-    spanish: (name) => `¡Hola, ${name}! ¡Mucho gusto!`,
-    french: (name) => `Bonjour, ${name}! Enchanté!`,
-    german: (name) => `Hallo, ${name}! Freut mich!`,
-}
-
-// greeting 도구 등록
-server.tool(
-    'greeting',
-    '사용자에게 이름과 언어를 입력받아 해당 언어로 인사말을 반환합니다.',
-    {
-        name: z.string().describe('인사할 사람의 이름'),
-        language: z.string().describe('인사말 언어 (korean, english, japanese, chinese, spanish, french, german)')
-    },
-    async ({ name, language }) => {
-        const lang = language.toLowerCase()
-        const greetingFn = greetings[lang]
-
-        if (!greetingFn) {
-            const availableLanguages = Object.keys(greetings).join(', ')
-            return {
-                content: [
-                    {
-                        type: 'text' as const,
-                        text: `지원하지 않는 언어입니다. 사용 가능한 언어: ${availableLanguages}`
-                    }
-                ]
-            }
-        }
-
-        return {
-            content: [
-                {
-                    type: 'text' as const,
-                    text: greetingFn(name)
                 }
             ]
-        }
-    }
-)
+        })
+    )
 
-// calc 도구 등록
-server.tool(
-    'calc',
-    '두 개의 숫자와 연산자를 입력받아 계산 결과를 반환합니다.',
-    {
-        num1: z.number().describe('첫 번째 숫자'),
-        num2: z.number().describe('두 번째 숫자'),
-        operator: z.string().describe('연산자 (+, -, *, /)')
-    },
-    async ({ num1, num2, operator }) => {
-        let result: number
+    // greeting 도구 등록
+    server.tool(
+        'greeting',
+        '사용자에게 이름과 언어를 입력받아 해당 언어로 인사말을 반환합니다.',
+        {
+            name: z.string().describe('인사할 사람의 이름'),
+            language: z.string().describe('인사말 언어 (korean, english, japanese, chinese, spanish, french, german)')
+        },
+        async ({ name, language }) => {
+            const lang = language.toLowerCase()
+            const greetingFn = greetings[lang]
 
-        switch (operator) {
-            case '+':
-                result = num1 + num2
-                break
-            case '-':
-                result = num1 - num2
-                break
-            case '*':
-                result = num1 * num2
-                break
-            case '/':
-                if (num2 === 0) {
-                    return {
-                        content: [
-                            {
-                                type: 'text' as const,
-                                text: '오류: 0으로 나눌 수 없습니다.'
-                            }
-                        ]
-                    }
-                }
-                result = num1 / num2
-                break
-            default:
+            if (!greetingFn) {
+                const availableLanguages = Object.keys(greetings).join(', ')
                 return {
                     content: [
                         {
                             type: 'text' as const,
-                            text: `지원하지 않는 연산자입니다. 사용 가능한 연산자: +, -, *, /`
+                            text: `지원하지 않는 언어입니다. 사용 가능한 언어: ${availableLanguages}`
                         }
                     ]
                 }
-        }
-
-        return {
-            content: [
-                {
-                    type: 'text' as const,
-                    text: `${num1} ${operator} ${num2} = ${result}`
-                }
-            ]
-        }
-    }
-)
-
-// getCurrentTime 도구 등록
-server.tool(
-    'getCurrentTime',
-    '현지 타임존을 확인하고 현재 시간을 반환합니다.',
-    {
-        format: z.enum(['full', 'date', 'time']).optional().describe('출력 형식 (full: 전체, date: 날짜만, time: 시간만). 기본값: full')
-    },
-    async ({ format = 'full' }) => {
-        const now = new Date()
-        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
-        
-        const dateOptions: Intl.DateTimeFormatOptions = {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            weekday: 'long'
-        }
-        
-        const timeOptions: Intl.DateTimeFormatOptions = {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: false
-        }
-        
-        let result: string
-        
-        switch (format) {
-            case 'date':
-                result = `📅 날짜: ${now.toLocaleDateString('ko-KR', dateOptions)}\n🌍 타임존: ${timezone}`
-                break
-            case 'time':
-                result = `⏰ 시간: ${now.toLocaleTimeString('ko-KR', timeOptions)}\n🌍 타임존: ${timezone}`
-                break
-            case 'full':
-            default:
-                result = `📅 날짜: ${now.toLocaleDateString('ko-KR', dateOptions)}\n⏰ 시간: ${now.toLocaleTimeString('ko-KR', timeOptions)}\n🌍 타임존: ${timezone}`
-        }
-        
-        return {
-            content: [
-                {
-                    type: 'text' as const,
-                    text: result
-                }
-            ]
-        }
-    }
-)
-
-// generateImage 도구 등록
-server.tool(
-    'generateImage',
-    '텍스트 프롬프트를 입력받아 AI 이미지를 생성합니다.',
-    {
-        prompt: z.string().describe('생성할 이미지에 대한 설명 (영어 권장)')
-    },
-    async ({ prompt }) => {
-        try {
-            const result = await hfClient.textToImage({
-                provider: 'auto',
-                model: 'black-forest-labs/FLUX.1-schnell',
-                inputs: prompt,
-                parameters: { num_inference_steps: 5 }
-            })
-
-            // 결과를 base64로 변환 (Blob 객체 처리)
-            let base64Data: string
-            if (result && typeof result === 'object' && 'arrayBuffer' in result) {
-                // Blob인 경우 arrayBuffer 메서드가 있음
-                const arrayBuffer = await (result as Blob).arrayBuffer()
-                base64Data = Buffer.from(arrayBuffer).toString('base64')
-            } else if (typeof result === 'string') {
-                // URL인 경우 fetch하여 변환
-                if (result.startsWith('http://') || result.startsWith('https://')) {
-                    const response = await fetch(result)
-                    const arrayBuffer = await response.arrayBuffer()
-                    base64Data = Buffer.from(arrayBuffer).toString('base64')
-                } else {
-                    // 이미 base64인 경우
-                    base64Data = result
-                }
-            } else {
-                throw new Error('예상치 못한 응답 형식입니다.')
             }
 
             return {
                 content: [
                     {
-                        type: 'image' as const,
-                        data: base64Data,
-                        mimeType: 'image/png',
-                        annotations: {
-                            audience: ['user'],
-                            priority: 0.9
+                        type: 'text' as const,
+                        text: greetingFn(name)
+                    }
+                ]
+            }
+        }
+    )
+
+    // calc 도구 등록
+    server.tool(
+        'calc',
+        '두 개의 숫자와 연산자를 입력받아 계산 결과를 반환합니다.',
+        {
+            num1: z.number().describe('첫 번째 숫자'),
+            num2: z.number().describe('두 번째 숫자'),
+            operator: z.string().describe('연산자 (+, -, *, /)')
+        },
+        async ({ num1, num2, operator }) => {
+            let result: number
+
+            switch (operator) {
+                case '+':
+                    result = num1 + num2
+                    break
+                case '-':
+                    result = num1 - num2
+                    break
+                case '*':
+                    result = num1 * num2
+                    break
+                case '/':
+                    if (num2 === 0) {
+                        return {
+                            content: [
+                                {
+                                    type: 'text' as const,
+                                    text: '오류: 0으로 나눌 수 없습니다.'
+                                }
+                            ]
                         }
                     }
-                ]
+                    result = num1 / num2
+                    break
+                default:
+                    return {
+                        content: [
+                            {
+                                type: 'text' as const,
+                                text: `지원하지 않는 연산자입니다. 사용 가능한 연산자: +, -, *, /`
+                            }
+                        ]
+                    }
             }
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : '알 수 없는 오류가 발생했습니다.'
+
             return {
                 content: [
                     {
                         type: 'text' as const,
-                        text: `이미지 생성 중 오류가 발생했습니다: ${errorMessage}`
+                        text: `${num1} ${operator} ${num2} = ${result}`
                     }
                 ]
             }
         }
-    }
-)
+    )
 
-// code_review 프롬프트 등록
-server.prompt(
-    'code_review',
-    '코드를 입력받아 상세한 코드 리뷰를 수행합니다.',
-    {
-        code: z.string().describe('리뷰할 코드'),
-        language: z.string().optional().describe('프로그래밍 언어 (예: javascript, python, typescript 등)')
-    },
-    async ({ code, language }) => {
-        const langInfo = language ? `프로그래밍 언어: ${language}` : '프로그래밍 언어: 자동 감지'
-        
-        return {
-            messages: [
-                {
-                    role: 'user' as const,
-                    content: {
+    // getCurrentTime 도구 등록
+    server.tool(
+        'getCurrentTime',
+        '현지 타임존을 확인하고 현재 시간을 반환합니다.',
+        {
+            format: z.enum(['full', 'date', 'time']).optional().describe('출력 형식 (full: 전체, date: 날짜만, time: 시간만). 기본값: full')
+        },
+        async ({ format = 'full' }) => {
+            const now = new Date()
+            const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+            
+            const dateOptions: Intl.DateTimeFormatOptions = {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                weekday: 'long'
+            }
+            
+            const timeOptions: Intl.DateTimeFormatOptions = {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            }
+            
+            let result: string
+            
+            switch (format) {
+                case 'date':
+                    result = `📅 날짜: ${now.toLocaleDateString('ko-KR', dateOptions)}\n🌍 타임존: ${timezone}`
+                    break
+                case 'time':
+                    result = `⏰ 시간: ${now.toLocaleTimeString('ko-KR', timeOptions)}\n🌍 타임존: ${timezone}`
+                    break
+                case 'full':
+                default:
+                    result = `📅 날짜: ${now.toLocaleDateString('ko-KR', dateOptions)}\n⏰ 시간: ${now.toLocaleTimeString('ko-KR', timeOptions)}\n🌍 타임존: ${timezone}`
+            }
+            
+            return {
+                content: [
+                    {
                         type: 'text' as const,
-                        text: `다음 코드에 대해 상세한 코드 리뷰를 수행해주세요.
+                        text: result
+                    }
+                ]
+            }
+        }
+    )
+
+    // generateImage 도구 등록 (HF 토큰이 있는 경우에만 활성화)
+    if (hfClient) {
+        server.tool(
+            'generateImage',
+            '텍스트 프롬프트를 입력받아 AI 이미지를 생성합니다.',
+            {
+                prompt: z.string().describe('생성할 이미지에 대한 설명 (영어 권장)')
+            },
+            async ({ prompt }) => {
+                try {
+                    const result = await hfClient.textToImage({
+                        provider: 'auto',
+                        model: 'black-forest-labs/FLUX.1-schnell',
+                        inputs: prompt,
+                        parameters: { num_inference_steps: 5 }
+                    })
+
+                    // 결과를 base64로 변환 (Blob 객체 처리)
+                    let base64Data: string
+                    if (result && typeof result === 'object' && 'arrayBuffer' in result) {
+                        // Blob인 경우 arrayBuffer 메서드가 있음
+                        const arrayBuffer = await (result as Blob).arrayBuffer()
+                        base64Data = Buffer.from(arrayBuffer).toString('base64')
+                    } else if (typeof result === 'string') {
+                        // URL인 경우 fetch하여 변환
+                        if (result.startsWith('http://') || result.startsWith('https://')) {
+                            const response = await fetch(result)
+                            const arrayBuffer = await response.arrayBuffer()
+                            base64Data = Buffer.from(arrayBuffer).toString('base64')
+                        } else {
+                            // 이미 base64인 경우
+                            base64Data = result
+                        }
+                    } else {
+                        throw new Error('예상치 못한 응답 형식입니다.')
+                    }
+
+                    return {
+                        content: [
+                            {
+                                type: 'image' as const,
+                                data: base64Data,
+                                mimeType: 'image/png',
+                                annotations: {
+                                    audience: ['user'],
+                                    priority: 0.9
+                                }
+                            }
+                        ]
+                    }
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : '알 수 없는 오류가 발생했습니다.'
+                    return {
+                        content: [
+                            {
+                                type: 'text' as const,
+                                text: `이미지 생성 중 오류가 발생했습니다: ${errorMessage}`
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+    }
+
+    // code_review 프롬프트 등록
+    server.prompt(
+        'code_review',
+        '코드를 입력받아 상세한 코드 리뷰를 수행합니다.',
+        {
+            code: z.string().describe('리뷰할 코드'),
+            language: z.string().optional().describe('프로그래밍 언어 (예: javascript, python, typescript 등)')
+        },
+        async ({ code, language }) => {
+            const langInfo = language ? `프로그래밍 언어: ${language}` : '프로그래밍 언어: 자동 감지'
+            
+            return {
+                messages: [
+                    {
+                        role: 'user' as const,
+                        content: {
+                            type: 'text' as const,
+                            text: `다음 코드에 대해 상세한 코드 리뷰를 수행해주세요.
 
 ${langInfo}
 
@@ -389,18 +397,13 @@ ${code}
 - 💡 제안사항
 
 마지막에 전체적인 코드 품질 점수를 10점 만점으로 평가해주세요.`
+                        }
                     }
-                }
-            ]
+                ]
+            }
         }
-    }
-)
+    )
 
-// 서버 시작
-async function main() {
-    const transport = new StdioServerTransport()
-    await server.connect(transport)
-    console.error('Greeting MCP Server running on stdio')
+    // Smithery에서 요구하는 server 객체 반환
+    return server.server
 }
-
-main().catch(console.error)
